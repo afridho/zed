@@ -1,5 +1,5 @@
 use gpui::{
-    Action, AnyElement, Hsla, MAX_BUTTONS_PER_SIDE, MouseButton, WindowButton, prelude::*, svg,
+    Action, AnyElement, Hsla, MAX_BUTTONS_PER_SIDE, MouseButton, WindowButton, prelude::*, rgb, svg,
 };
 use ui::prelude::*;
 
@@ -25,7 +25,7 @@ impl LinuxWindowControls {
 }
 
 impl RenderOnce for LinuxWindowControls {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let is_maximized = window.is_maximized();
         let supported_controls = window.window_controls();
         let button_elements: Vec<AnyElement> = self
@@ -38,14 +38,14 @@ impl RenderOnce for LinuxWindowControls {
                 WindowButton::Close => true,
             })
             .map(|button| {
-                create_window_button(button, button.id(), is_maximized, &*self.close_action, cx)
+                create_window_button(button, button.id(), is_maximized, &*self.close_action)
             })
             .collect();
 
         h_flex()
             .id(self.id)
             .when(!button_elements.is_empty(), |el| {
-                el.gap_3()
+                el.gap(px(8.0))
                     .px_3()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .children(button_elements)
@@ -58,11 +58,10 @@ fn create_window_button(
     id: &'static str,
     is_maximized: bool,
     close_action: &dyn Action,
-    cx: &mut App,
 ) -> AnyElement {
     match button {
         WindowButton::Minimize => {
-            WindowControl::new(id, WindowControlType::Minimize, cx).into_any_element()
+            WindowControl::new(id, WindowControlType::Minimize).into_any_element()
         }
         WindowButton::Maximize => WindowControl::new(
             id,
@@ -71,11 +70,10 @@ fn create_window_button(
             } else {
                 WindowControlType::Maximize
             },
-            cx,
         )
         .into_any_element(),
         WindowButton::Close => {
-            WindowControl::new_close(id, WindowControlType::Close, close_action.boxed_clone(), cx)
+            WindowControl::new_close(id, WindowControlType::Close, close_action.boxed_clone())
                 .into_any_element()
         }
     }
@@ -91,9 +89,6 @@ pub enum WindowControlType {
 
 impl WindowControlType {
     /// Returns the icon name for the window control type.
-    ///
-    /// Will take a [PlatformStyle] in the future to return a different
-    /// icon name based on the platform.
     pub fn icon(&self) -> IconName {
         match self {
             WindowControlType::Minimize => IconName::GenericMinimize,
@@ -102,54 +97,14 @@ impl WindowControlType {
             WindowControlType::Close => IconName::GenericClose,
         }
     }
-}
 
-#[allow(unused)]
-pub struct WindowControlStyle {
-    background: Hsla,
-    background_hover: Hsla,
-    icon: Hsla,
-    icon_hover: Hsla,
-}
-
-impl WindowControlStyle {
-    pub fn default(cx: &mut App) -> Self {
-        let colors = cx.theme().colors();
-
-        Self {
-            background: colors.ghost_element_background,
-            background_hover: colors.ghost_element_hover,
-            icon: colors.icon,
-            icon_hover: colors.icon_muted,
-        }
-    }
-
-    #[allow(unused)]
-    /// Sets the background color of the control.
-    pub fn background(mut self, color: impl Into<Hsla>) -> Self {
-        self.background = color.into();
-        self
-    }
-
-    #[allow(unused)]
-    /// Sets the background color of the control when hovered.
-    pub fn background_hover(mut self, color: impl Into<Hsla>) -> Self {
-        self.background_hover = color.into();
-        self
-    }
-
-    #[allow(unused)]
-    /// Sets the color of the icon.
-    pub fn icon(mut self, color: impl Into<Hsla>) -> Self {
-        self.icon = color.into();
-        self
-    }
-
-    #[allow(unused)]
-    /// Sets the color of the icon when hovered.
-    pub fn icon_hover(mut self, color: impl Into<Hsla>) -> Self {
-        self.icon_hover = color.into();
-        self
+    fn background(self) -> Hsla {
+        rgb(match self {
+            Self::Close => 0xe9524a,
+            Self::Minimize => 0xf1ae1b,
+            Self::Maximize | Self::Restore => 0x59c837,
+        })
+        .into()
     }
 }
 
@@ -157,18 +112,14 @@ impl WindowControlStyle {
 pub struct WindowControl {
     id: ElementId,
     icon: WindowControlType,
-    style: WindowControlStyle,
     close_action: Option<Box<dyn Action>>,
 }
 
 impl WindowControl {
-    pub fn new(id: impl Into<ElementId>, icon: WindowControlType, cx: &mut App) -> Self {
-        let style = WindowControlStyle::default(cx);
-
+    pub fn new(id: impl Into<ElementId>, icon: WindowControlType) -> Self {
         Self {
             id: id.into(),
             icon,
-            style,
             close_action: None,
         }
     }
@@ -177,29 +128,11 @@ impl WindowControl {
         id: impl Into<ElementId>,
         icon: WindowControlType,
         close_action: Box<dyn Action>,
-        cx: &mut App,
     ) -> Self {
-        let style = WindowControlStyle::default(cx);
-
         Self {
             id: id.into(),
             icon,
-            style,
             close_action: Some(close_action.boxed_clone()),
-        }
-    }
-
-    #[allow(unused)]
-    pub fn custom_style(
-        id: impl Into<ElementId>,
-        icon: WindowControlType,
-        style: WindowControlStyle,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            icon,
-            style,
-            close_action: None,
         }
     }
 }
@@ -211,17 +144,21 @@ impl RenderOnce for WindowControl {
             WindowControlType::Restore | WindowControlType::Maximize => window.is_resizable(),
             WindowControlType::Close => true,
         };
+        let active = window.is_window_active();
+        let background = if enabled && active {
+            self.icon.background()
+        } else {
+            cx.theme().colors().icon_disabled
+        };
+        let symbol: Hsla = rgb(0x302820).into();
+        let pressed_background = background.blend(gpui::black().opacity(0.18));
         let icon = svg()
-            .size_4()
+            .size(px(10.0))
             .flex_none()
             .path(self.icon.icon().path())
-            .text_color(if enabled {
-                self.style.icon
-            } else {
-                cx.theme().colors().icon_disabled
-            })
+            .text_color(gpui::transparent_black())
             .when(enabled, |this| {
-                this.group_hover("", |this| this.text_color(self.style.icon_hover))
+                this.group_hover("", |this| this.text_color(symbol))
             });
 
         h_flex()
@@ -229,13 +166,13 @@ impl RenderOnce for WindowControl {
             .group("")
             .justify_center()
             .content_center()
-            .rounded_2xl()
-            .w_5()
-            .h_5()
+            .rounded_full()
+            .size(px(14.0))
+            .flex_none()
+            .bg(background)
             .when(enabled, |this| {
                 this.cursor_pointer()
-                    .hover(|this| this.bg(self.style.background_hover))
-                    .active(|this| this.bg(self.style.background_hover))
+                    .active(|this| this.bg(pressed_background))
             })
             .child(icon)
             .on_mouse_move(|_, _, cx| cx.stop_propagation())
